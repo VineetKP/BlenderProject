@@ -1,0 +1,175 @@
+import bpy
+import math
+import os
+
+# Clear existing mesh objects and cameras
+bpy.ops.object.select_all(action='SELECT')
+bpy.ops.object.delete(use_global=False)
+
+# Clear existing collections
+for collection in bpy.data.collections:
+    bpy.data.collections.remove(collection)
+
+print("Scene cleared successfully")
+
+# 1. Load the Audi R8 FBX model
+fbx_path = "/home/vineet/Downloads/Audi R8/Models/Audi R8.fbx"
+
+if os.path.exists(fbx_path):
+    bpy.ops.import_scene.fbx(filepath=fbx_path)
+    print(f"Loaded model from: {fbx_path}")
+    # Get the car object
+    car_objects = [obj for obj in bpy.context.scene.objects if obj.type == 'MESH']
+    if car_objects:
+        car = max(car_objects, key=lambda obj: obj.dimensions.x * obj.dimensions.y * obj.dimensions.z)
+        car_location = car.location
+        car_dimensions = car.dimensions
+    else:
+        car_location = (0, 0, 0)
+        car_dimensions = (4, 2, 1.5)
+else:
+    print(f"Warning: File not found at {fbx_path}, using placeholder")
+    # Create a simple placeholder for the car
+    bpy.ops.mesh.primitive_cube_add(size=4, location=(0, 0, 1))
+    car = bpy.context.active_object
+    car.name = "Car_Placeholder"
+    car_location = car.location
+    car_dimensions = car.dimensions
+
+print(f"Car dimensions: {car_dimensions}")
+
+# 2. Create cameras at four positions (Front, Rear, Left, Right)
+camera_distance = 1.0  # Closer to car for better bowl view
+camera_height = 0.8  # Lower height, typical for car-mounted cameras
+
+camera_configs = [
+    {
+        "name": "Camera_Front",
+        "location": (car_location[0] + car_dimensions[0]/2 + camera_distance, car_location[1], camera_height),
+        "rotation": (math.radians(90), 0, math.radians(-90))  # Looking forward (away from car)
+    },
+    {
+        "name": "Camera_Rear",
+        "location": (car_location[0] - car_dimensions[0]/2 - camera_distance, car_location[1], camera_height),
+        "rotation": (math.radians(90), 0, math.radians(90))  # Looking backward (away from car)
+    },
+    {
+        "name": "Camera_Left",
+        "location": (car_location[0], car_location[1] - car_dimensions[1]/2 - camera_distance, camera_height),
+        "rotation": (math.radians(90), 0, math.radians(180))  # Looking left (away from car)
+    },
+    {
+        "name": "Camera_Right",
+        "location": (car_location[0], car_location[1] + car_dimensions[1]/2 + camera_distance, camera_height),
+        "rotation": (math.radians(90), 0, math.radians(0))  # Looking right (away from car)
+    }
+]
+
+cameras = []
+for config in camera_configs:
+    bpy.ops.object.camera_add(location=config["location"], rotation=config["rotation"])
+    cam = bpy.context.active_object
+    cam.name = config["name"]
+    
+    # Set up fisheye lens for bowl view
+    cam.data.type = 'PANO'
+    cam.data.panorama_type = 'FISHEYE_EQUISOLID'
+    cam.data.lens = 10.5  # Fisheye focal length
+    cam.data.sensor_width = 23.6
+    cam.data.sensor_height = 23.6
+    cam.data.fisheye_fov = math.radians(190)  # Wide FOV for fisheye
+    cam.data.fisheye_lens = 10.5
+    
+    cameras.append(cam)
+    print(f"Created {config['name']} with fisheye lens at {config['location']}")
+
+# 4. Add simple background scene - just 4 colored cubes in front of each camera
+cube_distance = 2.0  # Distance from each camera
+
+# Define colors for each cube (R, G, B, A)
+cube_colors = [
+    (1, 0, 0, 1),    # Red for Front
+    (0, 1, 0, 1),    # Green for Rear
+    (0, 0, 1, 1),    # Blue for Left
+    (1, 1, 0, 1)     # Yellow for Right
+]
+
+cube_positions = [
+    (car_location[0] + car_dimensions[0]/2 + camera_distance + cube_distance, car_location[1], 0.5),      # Front
+    (car_location[0] - car_dimensions[0]/2 - camera_distance - cube_distance, car_location[1], 0.5),      # Rear
+    (car_location[0], car_location[1] - car_dimensions[1]/2 - camera_distance - cube_distance, 0.5),      # Left
+    (car_location[0], car_location[1] + car_dimensions[1]/2 + camera_distance + cube_distance, 0.5)       # Right
+]
+
+for i, (pos, color) in enumerate(zip(cube_positions, cube_colors)):
+    # Create cube
+    bpy.ops.mesh.primitive_cube_add(size=1, location=pos)
+    cube = bpy.context.active_object
+    cube.name = f"Marker_Cube_{i}"
+    
+    # Create material with color
+    mat = bpy.data.materials.new(name=f"Material_Cube_{i}")
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get('Principled BSDF')
+    if bsdf:
+        bsdf.inputs['Base Color'].default_value = color
+    cube.data.materials.append(mat)
+    print(f"Created colored cube {i} at {pos}")
+
+# Add simple ground plane
+bpy.ops.mesh.primitive_plane_add(size=30, location=(0, 0, 0))
+ground = bpy.context.active_object
+ground.name = "Ground"
+
+# Add basic lighting
+bpy.ops.object.light_add(type='SUN', location=(0, 0, 10))
+sun = bpy.context.active_object
+sun.data.energy = 1
+
+# Set up render settings - Use CYCLES for fisheye support
+bpy.context.scene.render.engine = 'CYCLES'
+bpy.context.scene.cycles.samples = 32  # Lower samples for faster rendering
+bpy.context.scene.render.resolution_x = 1280
+bpy.context.scene.render.resolution_y = 720
+bpy.context.scene.render.image_settings.file_format = 'PNG'
+
+# 5. Render and save bowl view outputs
+output_dir = "/home/vineet/Downloads/bowl_view_outputs"
+os.makedirs(output_dir, exist_ok=True)
+
+print(f"\nRendering bowl views to: {output_dir}")
+
+for camera in cameras:
+    bpy.context.scene.camera = camera
+    output_path = os.path.join(output_dir, f"{camera.name}.png")
+    bpy.context.scene.render.filepath = output_path
+    bpy.ops.render.render(write_still=True)
+    print(f"Rendered {camera.name} -> {output_path}")
+
+# Create a top-down bowl view
+bpy.ops.object.camera_add(location=(car_location[0], car_location[1], 12), 
+                          rotation=(0, 0, 0))
+top_cam = bpy.context.active_object
+top_cam.name = "Camera_TopView"
+top_cam.data.type = 'PANO'
+top_cam.data.panorama_type = 'FISHEYE_EQUISOLID'
+top_cam.data.lens = 10.5  # Fisheye focal length
+top_cam.data.sensor_width = 23.6
+top_cam.data.sensor_height = 23.6
+top_cam.data.fisheye_fov = math.radians(190)  # Wide FOV for fisheye
+top_cam.data.fisheye_lens = 10.5
+
+bpy.context.scene.camera = top_cam
+output_path = os.path.join(output_dir, "Bowl_View_Top.png")
+bpy.context.scene.render.filepath = output_path
+bpy.ops.render.render(write_still=True)
+print(f"Rendered Bowl_View_Top -> {output_path}")
+
+print("\n=== Bowl View Generation Complete ===")
+print(f"All outputs saved to: {output_dir}")
+print(f"Generated {len(cameras) + 1} views")
+
+# Save the blend file
+blend_output = os.path.join(output_dir, "surround_view_setup.blend")
+bpy.ops.wm.save_as_mainfile(filepath=blend_output)
+print(f"Saved Blender file: {blend_output}")
